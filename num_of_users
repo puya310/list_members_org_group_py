@@ -1,0 +1,99 @@
+import requests
+import json
+import getpass
+import csv
+
+# Prompt for target type (Group or Org)
+target_type = input("List members of a Group or an Org? (group/org): ").strip().lower()
+while target_type not in ["group", "org"]:
+    target_type = input("❌ Invalid input. Please enter 'group' or 'org': ").strip().lower()
+
+# Prompt for appropriate ID
+if target_type == "group":
+    entity_id = input("Enter your Snyk Group ID: ").strip()
+    base_url = f"https://api.snyk.io/rest/groups/{entity_id}/memberships"
+else:
+    entity_id = input("Enter your Snyk Org ID: ").strip()
+    base_url = f"https://api.snyk.io/rest/orgs/{entity_id}/memberships"
+
+# Prompt for API token
+api_token = getpass.getpass("Enter your Snyk API Token: ").strip()
+
+# Prompt for output format
+output_format = input("Choose output format (json/csv): ").strip().lower()
+while output_format not in ["json", "csv"]:
+    output_format = input("❌ Invalid input. Please enter 'json' or 'csv': ").strip().lower()
+
+# Query parameters
+params = {
+    "version": "2024-10-15"
+}
+
+# Headers
+headers = {
+    "Accept": "application/vnd.api+json",
+    "Authorization": f"token {api_token}"
+}
+
+# Make paginated requests
+all_memberships = []
+url = base_url
+
+while url:
+    response = requests.get(url, headers=headers, params=params)
+
+    if response.status_code != 200:
+        print(f"❌ Error {response.status_code}: {response.text}")
+        break
+
+    try:
+        data = response.json()
+    except ValueError:
+        print("❌ Failed to parse JSON.")
+        break
+
+    all_memberships.extend(data.get("data", []))
+
+    # Handle pagination (fixing relative "next" URLs)
+    next_link = data.get("links", {}).get("next")
+    if next_link:
+        if next_link.startswith("http"):
+            url = next_link
+        else:
+            url = f"https://api.snyk.io/rest{next_link}"
+        params = {}  # clear params after first request
+    else:
+        url = None
+
+
+# Extract relevant fields from relationships
+filtered_users = []
+for item in all_memberships:
+    user_data = item.get("relationships", {}).get("user", {}).get("data", {})
+    role_data = item.get("relationships", {}).get("role", {}).get("data", {})
+
+    user_attrs = user_data.get("attributes", {})
+    role_attrs = role_data.get("attributes", {})
+
+    filtered_users.append({
+        "name": user_attrs.get("name"),
+        "email": user_attrs.get("email"),
+        "role": role_attrs.get("name")
+    })
+
+# Choose filename
+file_suffix = "group" if target_type == "group" else "org"
+output_file = f"snyk_{file_suffix}_{entity_id}_users.{output_format}"
+
+# Save to JSON or CSV
+if output_format == "json":
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(filtered_users, f, indent=2)
+else:
+    with open(output_file, "w", newline='', encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=["name", "email", "role"])
+        writer.writeheader()
+        writer.writerows(filtered_users)
+
+print(f"✅ User list saved to {output_file}")
+print(f"Number of Users: {len(filtered_users)}")
